@@ -1,6 +1,6 @@
 # test-babylon-mmd
 
-このプロジェクトは、以下の技術を使用して構築された Web ベースの MMD（MikuMikuDance）ビューアです。基本的に [babylon-mmd](https://github.com/your-repo/babylon-mmd) のサンプルを参考にしています。
+このプロジェクトは、以下の技術を使用して構築された Web ベースの MMD（MikuMikuDance）ビューアです。基本的に [babylon-mmd](https://github.com/noname0310/babylon-mmd) のサンプルを参考にしています。
 
 ## 使用技術
 
@@ -34,6 +34,8 @@
      - [pmx converter](https://noname0310.github.io/babylon-mmd/pmx_converter)
      - [vmd converter](https://noname0310.github.io/babylon-mmd/vmd_converter)
 
+   - **注意:** 任意の bpmx や bvmd ファイルを使用する場合は、`SceneBuilder.ts` ファイル内でファイルパスを変更する必要があります。
+
 4. **開発サーバーを実行**:
 
    ```sh
@@ -56,4 +58,4 @@
 - [TypeScript](https://www.typescriptlang.org/)
 - [Biome](https://biomejs.com/)
 - [Babylon.js](https://www.babylonjs.com/)
-- [babylon-mmd](https://github.com/your-repo/babylon-mmd)
+- [babylon-mmd](https://github.com/noname0310/babylon-mmd)
