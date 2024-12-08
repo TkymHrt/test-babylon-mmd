@@ -5,9 +5,6 @@ import { SceneBuilder } from "./sceneBuilder";
 
 window.onload = (): void => {
 	const canvas = document.createElement("canvas");
-	canvas.style.width = "100%";
-	canvas.style.height = "100%";
-	canvas.style.display = "block";
 	document.body.appendChild(canvas);
 
 	const engine = new Engine(
