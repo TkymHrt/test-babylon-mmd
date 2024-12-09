@@ -1,6 +1,5 @@
 import type { AbstractEngine } from "@babylonjs/core";
 import {
-	ArcRotateCamera,
 	Color3,
 	Color4,
 	CreateGround,
@@ -36,86 +35,52 @@ import {
 import type { ISceneBuilder } from "./baseRuntime";
 
 export class SceneBuilder implements ISceneBuilder {
+	// ロードするファイルのパスを定数として定義
+	private readonly MOTION_FILE_PATH = "/gimme_gimme_motion.bvmd";
+	private readonly CAMERA_MOTION_FILE_PATH = "/GimmeGimmeC.bvmd";
+	private readonly MODEL_FILE_PATH = "/sour_miku_black.bpmx";
+	private readonly AUDIO_FILE_PATH = "/gimme_gimme.wav";
+
+	// シーン内で使用するプロパティを定義
+	private engine!: AbstractEngine;
+	private scene!: Scene;
+	private canvas!: HTMLCanvasElement;
+
+	// カメラのルートノードを追加
+	private cameraRoot!: TransformNode;
+
 	public async build(
 		canvas: HTMLCanvasElement,
 		engine: AbstractEngine,
 	): Promise<Scene> {
 		try {
-			// SDEFを適用するためにエンジンをオーバーライド
-			SdefInjector.OverrideEngineCreateEffect(engine);
+			this.engine = engine;
+			this.canvas = canvas;
 
-			// カスタムテクスチャローダーを登録
-			registerDxBmpTextureLoader();
+			// エンジンとシーンの初期設定
+			this.initializeEngine();
+			this.scene = new Scene(engine);
+			this.setupScene();
 
-			// MMD標準マテリアルビルダーを作成
-			const materialBuilder = new MmdStandardMaterialBuilder();
+			// 必要な要素を作成
+			const mmdRoot = this.createMmdRoot();
+			const mmdCamera = this.createMmdCamera(mmdRoot);
+			const directionalLight = this.createDirectionalLight();
+			const ground = this.createGround(directionalLight, mmdRoot);
+			const audioPlayer = this.setupAudioPlayer();
 
-			// シーンを作成し、基本設定を行う
-			const scene = new Scene(engine);
-			this.setupScene(scene);
-
-			// MMDルートノード、カメラ、ライト、地面、オーディオプレーヤーを作成
-			const mmdRoot = this.createMmdRoot(scene);
-			const mmdCamera = this.createMmdCamera(scene, mmdRoot);
-			const camera = this.createArcRotateCamera(scene, canvas, mmdRoot);
-			const directionalLight = this.createDirectionalLight(scene);
-			const ground = this.createGround(scene, directionalLight, mmdRoot);
-			const audioPlayer = this.setupAudioPlayer(scene);
-
-			// ローディング画面を表示
-			engine.displayLoadingUI();
-			const loadingTexts: string[] = [];
-			const updateLoadingText = (updateIndex: number, text: string): void => {
-				loadingTexts[updateIndex] = text;
-				engine.loadingUIText = `<br/><br/><br/><br/>${loadingTexts.join("<br/><br/>")}`;
-			};
-
-			// BvmdLoaderを使用して.bvmdファイルを読み込み
-			const bvmdLoader = new BvmdLoader(scene);
-			bvmdLoader.loggingEnabled = true;
-
-			// BpmxLoaderをシーンローダーに登録
-			SceneLoader.RegisterPlugin(new BpmxLoader());
+			// ローディングUIの設定
+			this.setupLoadingUI();
 
 			// アセットを並行してロード
 			const [wasmInstance, mmdAnimation, cameraAnimation, modelMesh] =
-				await Promise.all([
-					getMmdWasmInstance(new MmdWasmInstanceTypeSPR()),
-					bvmdLoader.loadAsync("motion", "/gimme_gimme_motion.bvmd", (event) =>
-						updateLoadingText(
-							0,
-							`モーションを読み込み中... ${event.loaded}/${event.total} (${Math.floor((event.loaded * 100) / event.total)}%)`,
-						),
-					),
-					bvmdLoader.loadAsync("cameraMotion", "/GimmeGimmeC.bvmd", (event) =>
-						updateLoadingText(
-							1,
-							`カメラモーションを読み込み中... ${event.loaded}/${event.total} (${Math.floor((event.loaded * 100) / event.total)}%)`,
-						),
-					),
-					loadAssetContainerAsync("/sour_miku_black.bpmx", scene, {
-						onProgress: (event) =>
-							updateLoadingText(
-								2,
-								`モデルを読み込み中... ${event.loaded}/${event.total} (${Math.floor((event.loaded * 100) / event.total)}%)`,
-							),
-						pluginOptions: {
-							mmdmodel: {
-								loggingEnabled: true,
-								materialBuilder: materialBuilder,
-							},
-						},
-					}).then((result) => {
-						result.addAllToScene();
-						return result.rootNodes[0] as MmdMesh;
-					}),
-				]);
+				await this.loadAssets(mmdRoot);
 
-			// ローディング画面を非表示
-			scene.onAfterRenderObservable.addOnce(() => engine.hideLoadingUI());
+			// ローディングUIを非表示
+			this.hideLoadingUI();
 
+			// MMDランタイムの設定
 			this.setupMmdRuntime(
-				scene,
 				wasmInstance,
 				mmdAnimation,
 				cameraAnimation,
@@ -123,73 +88,67 @@ export class SceneBuilder implements ISceneBuilder {
 				mmdRoot,
 				mmdCamera,
 				audioPlayer,
+				directionalLight,
 			);
 
-			this.setupDefaultRenderingPipeline(scene, mmdCamera, camera);
+			// レンダリングパイプラインの設定
+			this.setupRenderingPipeline(mmdCamera);
 
-			const xr = await this.setupXRExperience(scene, ground, mmdCamera, camera);
+			// XRエクスペリエンスの設定
+			const xr = await this.setupXRExperience(ground, mmdCamera);
 
-			this.setupEnterVrButton(xr, scene, camera, mmdCamera);
+			// VRモードのボタンを設定
+			this.setupEnterVrButton(xr);
 
-			return scene;
+			return this.scene;
 		} catch (error) {
 			console.error("シーンの構築中にエラーが発生しました:", error);
 			throw error;
 		}
 	}
 
+	// エンジンの初期設定
+	private initializeEngine(): void {
+		// SDEFを適用するためにエンジンをオーバーライド
+		SdefInjector.OverrideEngineCreateEffect(this.engine);
+		// カスタムテクスチャローダーを登録
+		registerDxBmpTextureLoader();
+	}
+
 	// シーンの基本設定を行う
-	private setupScene(scene: Scene): void {
-		scene.clearColor = new Color4(0.95, 0.95, 0.95, 1.0);
-		scene.ambientColor = new Color3(0.5, 0.5, 0.5);
+	private setupScene(): void {
+		this.scene.clearColor = new Color4(0.95, 0.95, 0.95, 1.0);
+		this.scene.ambientColor = new Color3(0.5, 0.5, 0.5);
 	}
 
 	// MMDのルートノードを作成する
-	private createMmdRoot(scene: Scene): TransformNode {
-		const mmdRoot = new TransformNode("mmdRoot", scene);
+	private createMmdRoot(): TransformNode {
+		const mmdRoot = new TransformNode("mmdRoot", this.scene);
 		mmdRoot.position.z = 20;
 		return mmdRoot;
 	}
 
 	// MMDのカメラを作成する
-	private createMmdCamera(scene: Scene, mmdRoot: TransformNode): MmdCamera {
-		const mmdCamera = new MmdCamera("mmdCamera", new Vector3(0, 10, 0), scene);
+	private createMmdCamera(mmdRoot: TransformNode): MmdCamera {
+		const mmdCamera = new MmdCamera(
+			"mmdCamera",
+			new Vector3(0, 10, 0),
+			this.scene,
+		);
 		mmdCamera.maxZ = 300;
 		mmdCamera.minZ = 1;
 		mmdCamera.parent = mmdRoot;
+		mmdCamera.attachControl(this.canvas, false);
+		mmdCamera.inertia = 0.8;
 		return mmdCamera;
 	}
 
-	// ArcRotateカメラを作成する
-	private createArcRotateCamera(
-		scene: Scene,
-		canvas: HTMLCanvasElement,
-		mmdRoot: TransformNode,
-	): ArcRotateCamera {
-		const camera = new ArcRotateCamera(
-			"arcRotateCamera",
-			0,
-			0,
-			45,
-			new Vector3(0, 10, 1),
-			scene,
-		);
-		camera.maxZ = 1000;
-		camera.minZ = 0.1;
-		camera.setPosition(new Vector3(0, 10, -45));
-		camera.attachControl(canvas, false);
-		camera.inertia = 0.8;
-		camera.speed = 4;
-		camera.parent = mmdRoot;
-		return camera;
-	}
-
 	// ディレクショナルライトを作成する
-	private createDirectionalLight(scene: Scene): DirectionalLight {
+	private createDirectionalLight(): DirectionalLight {
 		const directionalLight = new DirectionalLight(
 			"DirectionalLight",
 			new Vector3(0.5, -1, 1),
-			scene,
+			this.scene,
 		);
 		directionalLight.intensity = 1.0;
 		directionalLight.autoCalcShadowZBounds = false;
@@ -211,18 +170,17 @@ export class SceneBuilder implements ISceneBuilder {
 		return shadowGenerator;
 	}
 
-	// 地面を作成するメソッド
+	// 地面を作成する
 	private createGround(
-		scene: Scene,
 		directionalLight: DirectionalLight,
 		mmdRoot: TransformNode,
 	): TransformNode {
 		const ground = CreateGround(
 			"ground1",
 			{ width: 100, height: 100, subdivisions: 2, updatable: false },
-			scene,
+			this.scene,
 		);
-		const shadowOnlyMaterial = new ShadowOnlyMaterial("shadowOnly", scene);
+		const shadowOnlyMaterial = new ShadowOnlyMaterial("shadowOnly", this.scene);
 		ground.material = shadowOnlyMaterial;
 		shadowOnlyMaterial.activeLight = directionalLight;
 		shadowOnlyMaterial.alpha = 0.4;
@@ -231,17 +189,87 @@ export class SceneBuilder implements ISceneBuilder {
 		return ground;
 	}
 
-	// オーディオプレイヤーを設定するメソッド
-	private setupAudioPlayer(scene: Scene): StreamAudioPlayer {
-		const audioPlayer = new StreamAudioPlayer(scene);
+	// オーディオプレイヤーを設定する
+	private setupAudioPlayer(): StreamAudioPlayer {
+		const audioPlayer = new StreamAudioPlayer(this.scene);
 		audioPlayer.preservesPitch = false;
-		audioPlayer.source = "/gimme_gimme.wav";
+		audioPlayer.source = this.AUDIO_FILE_PATH;
 		return audioPlayer;
 	}
 
-	// MMDランタイムを設定するメソッド
+	// ローディングUIの設定
+	private setupLoadingUI(): void {
+		this.engine.displayLoadingUI();
+	}
+
+	// ローディングUIを非表示にする
+	private hideLoadingUI(): void {
+		this.scene.onAfterRenderObservable.addOnce(() =>
+			this.engine.hideLoadingUI(),
+		);
+	}
+
+	// アセットを並行してロード
+	private async loadAssets(
+		_mmdRoot: TransformNode,
+	): Promise<[MmdWasmInstance, MmdAnimation, MmdAnimation, MmdMesh]> {
+		const materialBuilder = new MmdStandardMaterialBuilder();
+		const bvmdLoader = new BvmdLoader(this.scene);
+		bvmdLoader.loggingEnabled = true;
+		SceneLoader.RegisterPlugin(new BpmxLoader());
+
+		const loadingTexts: string[] = [];
+		const updateLoadingText = (index: number, text: string): void => {
+			loadingTexts[index] = text;
+			this.engine.loadingUIText = `<br/><br/><br/><br/>${loadingTexts.join(
+				"<br/><br/>",
+			)}`;
+		};
+
+		return Promise.all([
+			getMmdWasmInstance(new MmdWasmInstanceTypeSPR()),
+			bvmdLoader.loadAsync("motion", this.MOTION_FILE_PATH, (event) =>
+				updateLoadingText(
+					0,
+					`モーションを読み込み中... ${event.loaded}/${
+						event.total
+					} (${Math.floor((event.loaded * 100) / event.total)}%)`,
+				),
+			),
+			bvmdLoader.loadAsync(
+				"cameraMotion",
+				this.CAMERA_MOTION_FILE_PATH,
+				(event) =>
+					updateLoadingText(
+						1,
+						`カメラモーションを読み込み中... ${event.loaded}/${
+							event.total
+						} (${Math.floor((event.loaded * 100) / event.total)}%)`,
+					),
+			),
+			loadAssetContainerAsync(this.MODEL_FILE_PATH, this.scene, {
+				onProgress: (event) =>
+					updateLoadingText(
+						2,
+						`モデルを読み込み中... ${event.loaded}/${event.total} (${Math.floor(
+							(event.loaded * 100) / event.total,
+						)}%)`,
+					),
+				pluginOptions: {
+					mmdmodel: {
+						loggingEnabled: true,
+						materialBuilder: materialBuilder,
+					},
+				},
+			}).then((result) => {
+				result.addAllToScene();
+				return result.rootNodes[0] as MmdMesh;
+			}),
+		]);
+	}
+
+	// MMDランタイムを設定する
 	private setupMmdRuntime(
-		scene: Scene,
 		wasmInstance: MmdWasmInstance,
 		mmdAnimation: MmdAnimation,
 		cameraAnimation: MmdAnimation,
@@ -249,38 +277,37 @@ export class SceneBuilder implements ISceneBuilder {
 		mmdRoot: TransformNode,
 		mmdCamera: MmdCamera,
 		audioPlayer: StreamAudioPlayer,
+		directionalLight: DirectionalLight,
 	): void {
 		const mmdRuntime = new MmdWasmRuntime(
 			wasmInstance,
-			scene,
-			new MmdWasmPhysics(scene),
+			this.scene,
+			new MmdWasmPhysics(this.scene),
 		);
 		mmdRuntime.loggingEnabled = true;
-		mmdRuntime.register(scene);
+		mmdRuntime.register(this.scene);
 
 		mmdRuntime.setAudioPlayer(audioPlayer);
 		mmdRuntime.playAnimation();
 
 		const mmdPlayerControl = new MmdPlayerControl(
-			scene,
+			this.scene,
 			mmdRuntime,
 			audioPlayer,
 		);
 		mmdPlayerControl.showPlayerControl();
-
-		mmdRuntime.playAnimation();
 
 		mmdRuntime.setCamera(mmdCamera);
 
 		const mmdWasmAnimation = new MmdWasmAnimation(
 			mmdAnimation,
 			wasmInstance,
-			scene,
+			this.scene,
 		);
 		const cameraWasmAnimation = new MmdWasmAnimation(
 			cameraAnimation,
 			wasmInstance,
-			scene,
+			this.scene,
 		);
 
 		mmdCamera.addAnimation(cameraWasmAnimation);
@@ -289,9 +316,7 @@ export class SceneBuilder implements ISceneBuilder {
 		modelMesh.parent = mmdRoot;
 
 		for (const mesh of modelMesh.metadata.meshes) mesh.receiveShadows = true;
-		const shadowGenerator = this.createShadowGenerator(
-			scene.lights[0] as DirectionalLight,
-		);
+		const shadowGenerator = this.createShadowGenerator(directionalLight);
 		shadowGenerator.addShadowCaster(modelMesh);
 
 		const mmdModel = mmdRuntime.createMmdModel(modelMesh);
@@ -300,10 +325,15 @@ export class SceneBuilder implements ISceneBuilder {
 
 		mmdRuntime.physics?.createGroundModel?.([0]);
 
-		scene.onAfterRenderObservable.addOnce(() => {
-			scene.freezeMaterials();
+		this.optimizeScene();
+	}
 
-			const meshes = scene.meshes;
+	// シーンの最適化
+	private optimizeScene(): void {
+		this.scene.onAfterRenderObservable.addOnce(() => {
+			this.scene.freezeMaterials();
+
+			const meshes = this.scene.meshes;
 			for (let i = 0, len = meshes.length; i < len; ++i) {
 				const mesh = meshes[i];
 				mesh.freezeWorldMatrix();
@@ -312,42 +342,32 @@ export class SceneBuilder implements ISceneBuilder {
 				mesh.alwaysSelectAsActiveMesh = true;
 			}
 
-			scene.skipPointerMovePicking = true;
-			scene.skipPointerDownPicking = true;
-			scene.skipPointerUpPicking = true;
-			scene.skipFrustumClipping = true;
-			scene.blockMaterialDirtyMechanism = true;
+			this.scene.skipPointerMovePicking = true;
+			this.scene.skipPointerDownPicking = true;
+			this.scene.skipPointerUpPicking = true;
+			this.scene.skipFrustumClipping = true;
+			this.scene.blockMaterialDirtyMechanism = true;
 		});
 	}
 
-	// デフォルトのレンダリングパイプラインを設定する
-	private setupDefaultRenderingPipeline(
-		scene: Scene,
-		mmdCamera: MmdCamera,
-		camera: ArcRotateCamera,
-	): void {
+	// レンダリングパイプラインを設定する
+	private setupRenderingPipeline(mmdCamera: MmdCamera): void {
 		const defaultPipeline = new DefaultRenderingPipeline(
 			"default",
 			true,
-			scene,
-			[mmdCamera, camera],
+			this.scene,
+			[mmdCamera],
 		);
 		defaultPipeline.samples = 4;
-		defaultPipeline.bloomEnabled = false;
-		defaultPipeline.chromaticAberrationEnabled = true;
-		defaultPipeline.chromaticAberration.aberrationAmount = 1;
 		defaultPipeline.fxaaEnabled = true;
-		defaultPipeline.imageProcessingEnabled = false;
 	}
 
-	// XRエクスペリエンスを設定するメソッド
+	// XRエクスペリエンスを設定する
 	private async setupXRExperience(
-		scene: Scene,
 		ground: TransformNode,
-		_mmdCamera: MmdCamera,
-		camera: ArcRotateCamera,
+		mmdCamera: MmdCamera,
 	): Promise<WebXRDefaultExperience> {
-		const xr = await WebXRDefaultExperience.CreateAsync(scene, {
+		const xr = await WebXRDefaultExperience.CreateAsync(this.scene, {
 			uiOptions: {
 				sessionMode: "immersive-vr",
 				referenceSpaceType: "local-floor",
@@ -355,6 +375,10 @@ export class SceneBuilder implements ISceneBuilder {
 			disableDefaultUI: true,
 			disableTeleportation: true,
 		});
+
+		// カメラのルートノードを作成し、カメラの親に設定
+		this.cameraRoot = new TransformNode("cameraRoot", this.scene);
+		xr.baseExperience.camera.parent = this.cameraRoot;
 
 		const featuresManager = xr.baseExperience.featuresManager;
 		featuresManager.enableFeature(
@@ -369,17 +393,22 @@ export class SceneBuilder implements ISceneBuilder {
 		featuresManager.enableFeature(WebXRFeatureName.TELEPORTATION, "stable", {
 			xrInput: xr.input,
 			floorMeshes: [ground],
+			defaultTargetMeshOptions: {
+				teleportationRadius: 2,
+				torusArrowMaterial: null,
+			},
+			useMainComponentOnly: true,
 			snapPositions: [new Vector3(2.4 * 3.5 * 1, 0, -10 * 1)],
 		});
 
-		// 右スティック入力で位置を移動する
 		xr.input.onControllerAddedObservable.add((controller) => {
 			controller.onMotionControllerInitObservable.add((motionController) => {
-				if (motionController.handedness === "right") {
-					const thumbstick = motionController.getComponent(
-						"xr-standard-thumbstick",
-					);
-					if (thumbstick) {
+				const thumbstick = motionController.getComponent(
+					"xr-standard-thumbstick",
+				);
+				if (thumbstick) {
+					if (motionController.handedness === "right") {
+						// 移動操作
 						thumbstick.onAxisValueChangedObservable.add((axes) => {
 							if (xr.baseExperience.state === WebXRState.IN_XR) {
 								const forward = xr.baseExperience.camera.getDirection(
@@ -395,10 +424,24 @@ export class SceneBuilder implements ISceneBuilder {
 								right.normalize();
 
 								const movement = forward
-									.scale(axes.y * 0.5)
-									.add(right.scale(axes.x * 0.5));
+									.scale(axes.y * 0.1)
+									.add(right.scale(axes.x * 0.1));
 
-								xr.baseExperience.camera.position.addInPlace(movement);
+								this.cameraRoot.position.addInPlace(movement);
+							}
+						});
+					} else if (motionController.handedness === "left") {
+						// 視点の回転操作
+						thumbstick.onAxisValueChangedObservable.add((axes) => {
+							if (xr.baseExperience.state === WebXRState.IN_XR) {
+								const rotationSpeed = 0.05;
+								this.cameraRoot.rotation.y -= axes.x * rotationSpeed;
+								this.cameraRoot.rotation.x -= axes.y * rotationSpeed;
+								// ピッチ角度を制限（必要に応じて調整）
+								this.cameraRoot.rotation.x = Math.max(
+									-Math.PI / 2,
+									Math.min(Math.PI / 2, this.cameraRoot.rotation.x),
+								);
 							}
 						});
 					}
@@ -406,7 +449,6 @@ export class SceneBuilder implements ISceneBuilder {
 			});
 		});
 
-		// スティック以外のボタンが押されたらXRモードを終了する
 		xr.input.onControllerAddedObservable.add((controller) => {
 			controller.onMotionControllerInitObservable.add((motionController) => {
 				const componentIds = motionController.getComponentIds();
@@ -423,19 +465,9 @@ export class SceneBuilder implements ISceneBuilder {
 			});
 		});
 
-		featuresManager.enableFeature(WebXRFeatureName.TELEPORTATION, "stable", {
-			xrInput: xr.input,
-			floorMeshes: [ground],
-			defaultTargetMeshOptions: {
-				teleportationRadius: 2,
-				torusArrowMaterial: null,
-			},
-			useMainComponentOnly: true,
-		});
-
 		xr.baseExperience.onStateChangedObservable.add((state) => {
 			if (state === WebXRState.NOT_IN_XR) {
-				const defaultPipeline = scene.postProcessRenderPipelineManager
+				const defaultPipeline = this.scene.postProcessRenderPipelineManager
 					.supportedPipelines[0] as DefaultRenderingPipeline;
 				defaultPipeline.fxaaEnabled = true;
 				defaultPipeline.chromaticAberrationEnabled = true;
@@ -445,7 +477,7 @@ export class SceneBuilder implements ISceneBuilder {
 					enterVrButton.style.display = "block";
 				}
 
-				scene.activeCamera = camera;
+				this.scene.activeCamera = mmdCamera;
 			}
 		});
 
@@ -453,12 +485,7 @@ export class SceneBuilder implements ISceneBuilder {
 	}
 
 	// VRモードに入るボタンを設定する
-	private setupEnterVrButton(
-		xr: WebXRDefaultExperience,
-		scene: Scene,
-		_camera: ArcRotateCamera,
-		_mmdCamera: MmdCamera,
-	): void {
+	private setupEnterVrButton(xr: WebXRDefaultExperience): void {
 		const enterVrButton = document.createElement("button");
 		enterVrButton.id = "enterVrButton";
 		enterVrButton.textContent = "VRモード";
@@ -471,14 +498,14 @@ export class SceneBuilder implements ISceneBuilder {
 				xr.renderTarget,
 			);
 
-			const defaultPipeline = scene.postProcessRenderPipelineManager
+			const defaultPipeline = this.scene.postProcessRenderPipelineManager
 				.supportedPipelines[0] as DefaultRenderingPipeline;
 			defaultPipeline.fxaaEnabled = false;
 			defaultPipeline.chromaticAberrationEnabled = false;
 
 			defaultPipeline.addCamera(xr.baseExperience.camera);
 
-			scene.activeCamera = xr.baseExperience.camera;
+			this.scene.activeCamera = xr.baseExperience.camera;
 			xr.baseExperience.camera.position.y = 10.0;
 
 			enterVrButton.style.display = "none";
