@@ -1,7 +1,7 @@
 import "./style.css";
 import { Engine } from "@babylonjs/core/Engines/engine";
-import { BaseRuntime } from "./baseRuntime";
-import { SceneBuilder } from "./sceneBuilder";
+import { createBaseRuntime } from "./baseRuntime";
+import { buildScene } from "./sceneBuilder";
 
 async function initializeEngine() {
 	const canvas = document.createElement("canvas");
@@ -16,10 +16,10 @@ async function initializeEngine() {
 		powerPreference: "high-performance",
 	});
 
-	const runtime = await BaseRuntime.Create({
+	const runtime = await createBaseRuntime({
 		canvas,
 		engine,
-		sceneBuilder: new SceneBuilder(),
+		sceneBuilder: { build: buildScene },
 	});
 
 	runtime.run();

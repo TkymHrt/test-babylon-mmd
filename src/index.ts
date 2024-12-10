@@ -1,7 +1,6 @@
 import { Engine } from "@babylonjs/core/Engines/engine";
-
-import { BaseRuntime } from "./baseRuntime";
-import { SceneBuilder } from "./sceneBuilder";
+import { createBaseRuntime } from "./baseRuntime";
+import { buildScene } from "./sceneBuilder";
 
 window.onload = (): void => {
 	const canvas = document.createElement("canvas");
@@ -24,9 +23,9 @@ window.onload = (): void => {
 		true,
 	);
 
-	BaseRuntime.Create({
+	createBaseRuntime({
 		canvas,
 		engine,
-		sceneBuilder: new SceneBuilder(),
+		sceneBuilder: { build: buildScene },
 	}).then((runtime) => runtime.run());
 };
